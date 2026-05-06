@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Dataslatinator</title>
+		<link rel="stylesheet" type="text/css" href="style.css" />
+	</head>
+	<body>
+		<h1>Dataslatinator</h1>
+
+		<div class="input-section" id="input-section">
+			<label for="jsonInput">Paste your BattleScribe JSON roster here:</label>
+			<textarea id="jsonInput" placeholder='{"roster": {...}}'></textarea>
+
+			<div class="button-row">
+				<button class="convert-btn" onclick="convertJSON()">
+					Generate Cards
+				</button>
+				<button class="clear-btn" onclick="clearInput()">Clear</button>
+			</div>
+
+			<div id="errorMessage" class="error-message"></div>
+			<div id="successMessage" class="success-message"></div>
+		</div>
+
+		<div id="unitsContainer" class="units-container"></div>
+		<div id="totalPoints" class="total-points"></div>
+
+		<script>
+			/**
+			 * Parse BattleScribe Markdown-like syntax to HTML
+			 * Handles: **bold**, ^^italics^^, and combinations
+			 */
+			function parseMarkdown(text) {
+				if (!text) return "";
+
+				// Split by paragraphs (double newlines or [NEWLINE] markers)
+				let paragraphs = text.split(/\n\s*\n|\[NEWLINE\]/);
+
+				return paragraphs
+					.map((para) => {
+						let processed = para.trim();
+
+						// Process nested patterns - we need to handle **^^text^^** and ^^**text**^^
+						// Work from innermost to outermost
+
+						// First pass: Handle ^^ inside **
+						// Pattern: **^^text^^** -> <strong><em>text</em></strong>
+						processed = processed.replace(
+							/\*\*\^\^(.+?)\^\^\*\*/g,
+							"<strong><em>$1</em></strong>",
+						);
+
+						// Pattern: ^^**text**^^ -> <em><strong>text</strong></em>
+						processed = processed.replace(
+							/\^\^\*\*(.+?)\*\*\^\^/g,
+							"<em><strong>$1</strong></em>",
+						);
+
+						// Second pass: Handle standalone **bold**
+						processed = processed.replace(
+							/\*\*(.+?)\*\*/g,
+							"<strong>$1</strong>",
+						);
+
+						// Third pass: Handle standalone ^^italics^^
+						processed = processed.replace(/\^\^(.+?)\^\^/g, "<em>$1</em>");
+
+						// Handle [PAGE] markers as page breaks
+						processed = processed.replace(/\[PAGE\]/g, "<br><br>");
+
+						// Wrap in paragraph tags if there's content
+						if (processed.trim()) {
+							return `<p>${processed}</p>`;
+						}
+
+						return "";
+					})
+					.filter((p) => p)
+					.join("");
+			}
+
+			function convertJSON() {
+				const inputSection = document.getElementById("input-section");
+				const input = document.getElementById("jsonInput").value.trim();
+				const errorDiv = document.getElementById("errorMessage");
+				const successDiv = document.getElementById("successMessage");
+				const container = document.getElementById("unitsContainer");
+				const totalDiv = document.getElementById("totalPoints");
+
+				errorDiv.style.display = "none";
+				successDiv.style.display = "none";
+				container.innerHTML = "";
+				totalDiv.innerHTML = "";
+
+				if (!input) {
+					showError("Please paste JSON data first.");
+					return;
+				}
+
+				let data;
+				try {
+					data = JSON.parse(input);
+				} catch (e) {
+					showError("Invalid JSON format. Please check your input.");
+					return;
+				}
+
+				// Extract units from the nested roster structure
+				const units = extractUnits(data.roster);
+
+				if (units.length === 0) {
+					showError("No units found in the roster data.");
+					return;
+				}
+
+				// Calculate total points
+				let totalPoints = 0;
+				if (data.roster.costs) {
+					const ptsCost = data.roster.costs.find((c) => c.name === "pts");
+					if (ptsCost) totalPoints = ptsCost.value;
+				}
+
+				// Create cards
+				units.forEach((unit, index) => {
+					const card = createDetailedUnitCard(unit, index);
+					container.appendChild(card);
+				});
+
+				// Display total
+				if (totalPoints > 0) {
+					totalDiv.innerHTML = `Total Army Points: ${totalPoints}`;
+				}
+
+				successDiv.textContent = `Successfully generated ${units.length} unit cards!`;
+				successDiv.style.display = "block";
+
+				// Hide the input section after a delay
+				setTimeout(function () {
+					inputSection.classList.add("hiding");
+				}, 5000);
+
+				setTimeout(function () {
+					inputSection.classList.add("hidden");
+				}, 6000);
+			}
+
+			function extractUnits(roster) {
+				const units = [];
+
+				if (roster.forces) {
+					roster.forces.forEach((force) => {
+						if (force.selections) {
+							force.selections.forEach((selection) => {
+								findUnits(selection, units);
+							});
+						}
+					});
+				}
+
+				return units;
+			}
+
+			function findUnits(node, units, parentName = "", role = "") {
+				if (!node) return;
+
+				// Determine role from categories
+				let nodeRole = role;
+				if (node.categories) {
+					const roleCategory = node.categories.find(
+						(cat) =>
+							cat.primary &&
+							[
+								"Battleline",
+								"Character",
+								"Infantry",
+								"Vehicle",
+								"Mounted",
+								"Dedicated Transport",
+							].includes(cat.name),
+					);
+					if (roleCategory) {
+						nodeRole = roleCategory.name;
+					}
+				}
+
+				// Check if this node is a unit
+				if (node.type === "unit" && node.name) {
+					const unitData = {
+						name: node.name,
+						role: nodeRole,
+						cost: node.costs?.find((c) => c.name === "pts")?.value || 0,
+						models: [],
+						abilities: [],
+						keywords: [],
+					};
+
+					// Extract keywords
+					if (node.categories) {
+						unitData.keywords = node.categories
+							.map((cat) => cat.name)
+							.filter(
+								(name) =>
+									![
+										"Battleline",
+										"Character",
+										"Infantry",
+										"Vehicle",
+										"Mounted",
+										"Dedicated Transport",
+										"Uncategorized",
+										"Configuration",
+										"Epic Hero",
+										"Swarm",
+										"Beast",
+										"Monster",
+										"Drone",
+										"Fortification",
+										"Unit",
+										"Allied Units",
+										"Reference",
+										"Illegal Units",
+									].includes(name),
+							);
+					}
+
+					// Extract unit-level abilities
+					if (node.rules) {
+						node.rules.forEach((rule) => {
+							if (!rule.hidden && rule.description) {
+								unitData.abilities.push({
+									name: rule.name,
+									description: parseMarkdown(rule.description),
+								});
+							}
+						});
+					}
+
+					// Extract models from selections
+					if (node.selections) {
+						extractModels(node.selections, unitData.models);
+					}
+
+					units.push(unitData);
+				}
+
+				// Recursively search children
+				if (node.selections) {
+					node.selections.forEach((child) => {
+						findUnits(child, units, node.name, nodeRole);
+					});
+				}
+			}
+
+			function extractModels(selections, models, parentName = "") {
+				if (!selections) return;
+
+				selections.forEach((selection) => {
+					if (selection.type === "model" && selection.name) {
+						const modelData = {
+							name: selection.name,
+							count: selection.number || 1,
+							stats: {},
+							weapons: [],
+							abilities: [],
+						};
+
+						// Extract stats from profiles
+						if (selection.profiles) {
+							selection.profiles.forEach((profile) => {
+								if (profile.characteristics && profile.typeName === "Unit") {
+									modelData.stats = {};
+									profile.characteristics.forEach((char) => {
+										modelData.stats[char.name] = char["$text"];
+									});
+								}
+							});
+						}
+
+						// Extract abilities
+						if (selection.rules) {
+							selection.rules.forEach((rule) => {
+								if (!rule.hidden && rule.description) {
+									modelData.abilities.push({
+										name: rule.name,
+										description: parseMarkdown(rule.description),
+									});
+								}
+							});
+						}
+
+						// Extract weapons
+						if (selection.selections) {
+							extractWeapons(selection.selections, modelData.weapons);
+						}
+
+						models.push(modelData);
+					}
+
+					if (selection.selections) {
+						extractModels(selection.selections, models, selection.name);
+					}
+				});
+			}
+
+			function extractWeapons(selections, weapons) {
+				if (!selections) return;
+
+				selections.forEach((selection) => {
+					if (selection.type === "upgrade" && selection.profiles) {
+						selection.profiles.forEach((profile) => {
+							if (profile.characteristics) {
+								weapons.push({
+									name: selection.name || profile.name,
+									count: selection.number || 1,
+									characteristics: {},
+								});
+
+								profile.characteristics.forEach((char) => {
+									weapons[weapons.length - 1].characteristics[char.name] =
+										char["$text"];
+								});
+							}
+						});
+					}
+
+					if (selection.selections) {
+						extractWeapons(selection.selections, weapons);
+					}
+				});
+			}
+
+			function createDetailedUnitCard(unit, index) {
+				const card = document.createElement("div");
+				card.className = "unit-card";
+				card.dataset.id = index;
+
+				// Header
+				const header = document.createElement("div");
+				header.className = "unit-header";
+				header.innerHTML = `
+                <div class="unit-info">
+                    <h3 class="unit-name">${unit.name}</h3>
+                    <div class="unit-role">${unit.role || "Unit"}</div>
+                    <div class="unit-cost">${unit.cost} pts</div>
+                </div>
+                <button class="remove-btn" onclick="removeUnit(${index})">×</button>
+            `;
+				card.appendChild(header);
+
+				// Models
+				unit.models.forEach((model, modelIndex) => {
+					const modelSection = document.createElement("div");
+					modelSection.className = "model-section";
+
+					const modelHeader = document.createElement("div");
+					modelHeader.className = "model-header";
+					modelHeader.innerHTML = `
+                    <div class="model-name">${model.name}</div>
+                    <div class="model-count">×${model.count}</div>
+                `;
+					modelSection.appendChild(modelHeader);
+
+					// Stats
+					if (Object.keys(model.stats).length > 0) {
+						const statsDiv = document.createElement("div");
+						statsDiv.className = "model-stats";
+
+						const statOrder = ["M", "T", "SV", "W", "LD", "OC"];
+						statOrder.forEach((stat) => {
+							if (model.stats[stat]) {
+								const statItem = document.createElement("div");
+								statItem.className = "stat-item";
+								statItem.innerHTML = `
+                                <div class="stat-label">${stat}</div>
+                                <div class="stat-value">${model.stats[stat]}</div>
+                            `;
+								statsDiv.appendChild(statItem);
+							}
+						});
+
+						modelSection.appendChild(statsDiv);
+					}
+
+					// Weapons
+					if (model.weapons.length > 0) {
+						const weaponTable = document.createElement("table");
+						weaponTable.className = "weapon-table";
+						weaponTable.innerHTML = `
+                        <thead>
+                            <tr>
+                                <th>Weapon</th>
+                                <th>Range</th>
+                                <th>A</th>
+                                <th>BS/WS</th>
+                                <th>S</th>
+                                <th>AP</th>
+                                <th>D</th>
+                                <th>Keywords</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    `;
+
+						const tbody = weaponTable.querySelector("tbody");
+						model.weapons.forEach((weapon) => {
+							const row = document.createElement("tr");
+							const keywords = weapon.characteristics["Keywords"] || "";
+
+							row.innerHTML = `
+                            <td><strong>${weapon.name}</strong> ${weapon.count > 1 ? `(×${weapon.count})` : ""}</td>
+                            <td>${weapon.characteristics["Range"] || "-"}</td>
+                            <td>${weapon.characteristics["A"] || "-"}</td>
+                            <td>${weapon.characteristics["BS"] || weapon.characteristics["WS"] || "-"}</td>
+                            <td>${weapon.characteristics["S"] || "-"}</td>
+                            <td>${weapon.characteristics["AP"] || "-"}</td>
+                            <td>${weapon.characteristics["D"] || "-"}</td>
+                            <td class="weapon-keywords">${keywords}</td>
+                        `;
+							tbody.appendChild(row);
+						});
+
+						modelSection.appendChild(weaponTable);
+					}
+
+					// Abilities
+					if (model.abilities.length > 0) {
+						const abilitiesDiv = document.createElement("div");
+						abilitiesDiv.className = "abilities-section";
+						abilitiesDiv.innerHTML =
+							'<div class="ability-title">Model Abilities</div>';
+
+						const abilityList = document.createElement("ul");
+						abilityList.className = "ability-list";
+
+						model.abilities.forEach((ability) => {
+							const li = document.createElement("li");
+							li.className = "ability-item";
+							li.innerHTML = `
+                            <div class="ability-name">${ability.name}</div>
+                            <div class="ability-desc">${ability.description}</div>
+                        `;
+							abilityList.appendChild(li);
+						});
+
+						abilitiesDiv.appendChild(abilityList);
+						modelSection.appendChild(abilitiesDiv);
+					}
+
+					card.appendChild(modelSection);
+				});
+
+				// Unit Abilities
+				if (unit.abilities.length > 0) {
+					const unitAbilitiesDiv = document.createElement("div");
+					unitAbilitiesDiv.className = "abilities-section";
+					unitAbilitiesDiv.innerHTML =
+						'<div class="ability-title">Unit Abilities</div>';
+
+					const abilityList = document.createElement("ul");
+					abilityList.className = "ability-list";
+
+					unit.abilities.forEach((ability) => {
+						const li = document.createElement("li");
+						li.className = "ability-item";
+						li.innerHTML = `
+                        <div class="ability-name">${ability.name}</div>
+                        <div class="ability-desc">${ability.description}</div>
+                    `;
+						abilityList.appendChild(li);
+					});
+
+					unitAbilitiesDiv.appendChild(abilityList);
+					card.appendChild(unitAbilitiesDiv);
+				}
+
+				// Keywords
+				if (unit.keywords.length > 0) {
+					const keywordsDiv = document.createElement("div");
+					keywordsDiv.className = "unit-keywords";
+					keywordsDiv.innerHTML = '<div class="keyword-title">Keywords</div>';
+
+					const keywordList = document.createElement("div");
+					keywordList.className = "keyword-list";
+
+					unit.keywords.forEach((keyword) => {
+						const tag = document.createElement("span");
+						tag.className = "keyword-tag";
+						tag.textContent = keyword;
+						keywordList.appendChild(tag);
+					});
+
+					keywordsDiv.appendChild(keywordList);
+					card.appendChild(keywordsDiv);
+				}
+
+				return card;
+			}
+
+			function removeUnit(index) {
+				const card = document.querySelector(`[data-id="${index}"]`);
+				if (card) {
+					card.classList.add("removed");
+					setTimeout(() => {
+						card.style.display = "none";
+					}, 300);
+				}
+			}
+
+			function clearInput() {
+				document.getElementById("jsonInput").value = "";
+				document.getElementById("unitsContainer").innerHTML = "";
+				document.getElementById("totalPoints").innerHTML = "";
+				document.getElementById("errorMessage").style.display = "none";
+				document.getElementById("successMessage").style.display = "none";
+			}
+
+			function showError(message) {
+				const errorDiv = document.getElementById("errorMessage");
+				errorDiv.textContent = message;
+				errorDiv.style.display = "block";
+			}
+		</script>
+	</body>
+</html>
