@@ -173,7 +173,8 @@
 					roster.forces.forEach((force) => {
 						if (force.selections) {
 							force.selections.forEach((selection) => {
-								findUnits(selection, units);
+								// Pass isTopLevel = true for direct force selections
+								findUnits(selection, units, "", "", true);
 							});
 						}
 					});
@@ -182,7 +183,13 @@
 				return units;
 			}
 
-			function findUnits(node, units, parentName = "", role = "") {
+			function findUnits(
+				node,
+				units,
+				parentName = "",
+				role = "",
+				isTopLevel = false,
+			) {
 				if (!node) return;
 
 				// Determine role from categories
@@ -205,18 +212,41 @@
 					}
 				}
 
-				// Check if this node is a unit
-				if (node.type === "unit" && node.name) {
+				// LOGIC:
+				// 1. If it's a "unit" type, it's always a unit card.
+				// 2. If it's a "model" type, it's ONLY a unit card if it is at the TOP LEVEL (isTopLevel = true).
+
+				const isUnitNode = node.type === "unit";
+				const isStandaloneModel =
+					node.type === "model" && isTopLevel && node.name;
+
+				if ((isUnitNode || isStandaloneModel) && node.name) {
+					// --- COST CALCULATION ---
+					let unitCost = 0;
+
+					// Check direct costs
+					if (node.costs) {
+						const ptsCost = node.costs.find((c) => c.name === "pts");
+						if (ptsCost) {
+							unitCost = ptsCost.value;
+						}
+					}
+
+					// If no direct cost, look inside selections (for units containing models)
+					if (unitCost === 0 && node.selections) {
+						unitCost = calculateNestedCost(node.selections);
+					}
+
 					const unitData = {
 						name: node.name,
 						role: nodeRole,
-						cost: node.costs?.find((c) => c.name === "pts")?.value || 0,
+						cost: unitCost,
 						models: [],
 						abilities: [],
 						keywords: [],
 					};
 
-					// Extract keywords
+					// --- KEYWORDS ---
 					if (node.categories) {
 						unitData.keywords = node.categories
 							.map((cat) => cat.name)
@@ -245,7 +275,7 @@
 							);
 					}
 
-					// Extract unit-level abilities
+					// --- ABILITIES (Unit Level) ---
 					if (node.rules) {
 						node.rules.forEach((rule) => {
 							if (!rule.hidden && rule.description) {
@@ -257,20 +287,87 @@
 						});
 					}
 
-					// Extract models from selections
-					if (node.selections) {
-						extractModels(node.selections, unitData.models);
+					// --- MODELS EXTRACTION ---
+					if (isUnitNode) {
+						// Standard Unit: Extract models from selections
+						if (node.selections) {
+							extractModels(node.selections, unitData.models);
+						}
+					} else if (isStandaloneModel) {
+						// Standalone Model (e.g., Morkanaut): Treat the node itself as the model
+						const modelData = {
+							name: node.name,
+							count: node.number || 1,
+							stats: {},
+							weapons: [],
+							abilities: [],
+						};
+
+						// 1. Extract Stats (Profiles)
+						if (node.profiles) {
+							node.profiles.forEach((profile) => {
+								if (profile.characteristics && profile.typeName === "Unit") {
+									profile.characteristics.forEach((char) => {
+										modelData.stats[char.name] = char["$text"];
+									});
+								}
+							});
+						}
+
+						// 2. Extract Abilities (Rules)
+						if (node.rules) {
+							node.rules.forEach((rule) => {
+								if (!rule.hidden && rule.description) {
+									modelData.abilities.push({
+										name: rule.name,
+										description: parseMarkdown(rule.description),
+									});
+								}
+							});
+						}
+
+						// 3. Extract Weapons (Selections inside the model)
+						if (node.selections) {
+							extractWeapons(node.selections, modelData.weapons);
+						}
+
+						unitData.models.push(modelData);
 					}
 
 					units.push(unitData);
 				}
 
-				// Recursively search children
+				// --- RECURSION ---
 				if (node.selections) {
 					node.selections.forEach((child) => {
-						findUnits(child, units, node.name, nodeRole);
+						// Children are never top-level
+						findUnits(child, units, node.name, nodeRole, false);
 					});
 				}
+			}
+
+			// Helper function to sum costs from nested selections
+			function calculateNestedCost(selections) {
+				if (!selections) return 0;
+
+				let total = 0;
+
+				selections.forEach((selection) => {
+					// If this selection has a cost, add it
+					if (selection.costs) {
+						const pts = selection.costs.find((c) => c.name === "pts");
+						if (pts) {
+							total += pts.value;
+						}
+					}
+
+					// If this selection has children, recurse
+					if (selection.selections) {
+						total += calculateNestedCost(selection.selections);
+					}
+				});
+
+				return total;
 			}
 
 			function extractModels(selections, models, parentName = "") {
