@@ -425,24 +425,42 @@
 				if (!selections) return;
 
 				selections.forEach((selection) => {
-					if (selection.type === "upgrade" && selection.profiles) {
+					// CASE 1: This selection HAS profiles (Actual Weapon(s))
+					if (
+						selection.type === "upgrade" &&
+						selection.profiles &&
+						selection.profiles.length > 0
+					) {
+						const count = selection.number || 1;
+
+						// LOOP THROUGH EACH PROFILE to create a separate weapon row
 						selection.profiles.forEach((profile) => {
 							if (profile.characteristics) {
-								weapons.push({
-									name: selection.name || profile.name,
-									count: selection.number || 1,
+								// CRITICAL FIX: Use profile.name instead of selection.name
+								// profile.name = "➤ Klaw of Mork - strike"
+								// selection.name = "Klaw of Mork"
+								const weaponName =
+									profile.name || selection.name || "Unknown Weapon";
+
+								const weaponEntry = {
+									name: weaponName,
+									count: count,
 									characteristics: {},
+								};
+
+								// Extract characteristics from THIS specific profile
+								profile.characteristics.forEach((char) => {
+									weaponEntry.characteristics[char.name] = char["$text"];
 								});
 
-								profile.characteristics.forEach((char) => {
-									weapons[weapons.length - 1].characteristics[char.name] =
-										char["$text"];
-								});
+								// Push this specific profile as a separate weapon row
+								weapons.push(weaponEntry);
 							}
 						});
 					}
-
-					if (selection.selections) {
+					// CASE 2: This selection has NO profiles but HAS children (Choice Group with no direct profiles)
+					else if (selection.selections && selection.selections.length > 0) {
+						// Recurse into children
 						extractWeapons(selection.selections, weapons);
 					}
 				});
