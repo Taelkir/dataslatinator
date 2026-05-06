@@ -4,7 +4,17 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>Dataslatinator</title>
-		<link rel="stylesheet" type="text/css" href="style.css" />
+		<link
+			id="theme-stylesheet"
+			rel="stylesheet"
+			type="text/css"
+			href="bootstrap-style.css"
+		/>
+		<style>
+			html {
+				background-color: black;
+			}
+		</style>
 	</head>
 	<body>
 		<h1>Dataslatinator</h1>
@@ -26,7 +36,17 @@
 
 		<div id="unitsContainer" class="units-container"></div>
 		<div id="totalPoints" class="total-points"></div>
-
+		<div class="theme-switcher">
+			<button onclick="switchTheme('neon-style.css')" class="convert-btn">
+				Dark Slate
+			</button>
+			<button onclick="switchTheme('bootstrap-style.css')" class="convert-btn">
+				Bootstrap Dark
+			</button>
+			<button onclick="switchTheme('pumpkin-style.css')" class="convert-btn">
+				Orky Orange
+			</button>
+		</div>
 		<script>
 			/**
 			 * Parse BattleScribe Markdown-like syntax to HTML
@@ -139,11 +159,11 @@
 				// Hide the input section after a delay
 				setTimeout(function () {
 					inputSection.classList.add("hiding");
-				}, 5000);
+				}, 1000);
 
 				setTimeout(function () {
 					inputSection.classList.add("hidden");
-				}, 6000);
+				}, 1500);
 			}
 
 			function extractUnits(roster) {
@@ -521,6 +541,28 @@
 				errorDiv.textContent = message;
 				errorDiv.style.display = "block";
 			}
+
+			// Add the theme switching functions
+			function switchTheme(stylesheetPath) {
+				console.log("switching theme to ", stylesheetPath);
+				const linkElement = document.getElementById("theme-stylesheet");
+				if (linkElement) {
+					linkElement.href = stylesheetPath;
+					localStorage.setItem("preferred-theme", stylesheetPath);
+				}
+			}
+
+			function loadPreferredTheme() {
+				const savedTheme = localStorage.getItem("preferred-theme");
+				if (savedTheme) {
+					const linkElement = document.getElementById("theme-stylesheet");
+					if (linkElement) {
+						linkElement.href = savedTheme;
+					}
+				}
+			}
+
+			document.addEventListener("DOMContentLoaded", loadPreferredTheme);
 		</script>
 	</body>
 </html>
